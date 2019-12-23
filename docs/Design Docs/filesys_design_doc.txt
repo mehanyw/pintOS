@@ -1,0 +1,145 @@
+       	     	     +-------------------------+
+		     |		EE 461S	       |
+		     | PROJECT 4: FILE SYSTEMS |
+		     |	   DESIGN DOCUMENT     |
+		     +-------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Ammar Sheikh <ammarsheikh@utexas.edu>
+Waseem Mehany <mehanyw@gmail.com>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+		     INDEXED AND EXTENSIBLE FILES
+		     ============================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+/* On-disk inode.
+   Must be exactly BLOCK_SECTOR_SIZE bytes long. */
+struct inode_disk
+{   
+    block_sector_t dir_sect[DIR_PTR_CNT];/* Table of Direct Pointers */
+    block_sector_t ind_sect;            /* Indirect Pointer */
+    block_sector_t doub_sect;           /* Doubly Indirect Pointer */
+    off_t length;                       /* Length Of File */ 
+    unsigned magic;                     /* Magic number. */
+    int32_t idx;
+    size_t space;                       /* Possible Space of File */
+    int32_t isDir;
+    int32_t unused;
+};
+
+
+
+>> A2: What is the maximum size of a file supported by your inode
+>> structure?  Show your work.
+
+(From Above) DIR_PTR_CNT = 120
+
+DP Mem + Indirect Ptr Mem + Double Indirect Pointer Mem
+(120*512) + (128*512) + (128*128*512) =  120*2^9 + 2^16 + 2^23 = 8515584 Bytes (Greater than 8 MB)
+
+
+
+---- RATIONALE ----
+
+>> A6: Is your inode structure a multilevel index?  If so, why did you
+>> choose this particular combination of direct, indirect, and doubly
+>> indirect blocks?  If not, why did you choose an alternative inode
+>> structure, and what advantages and disadvantages does your
+>> structure have, compared to a multilevel index?
+
+Yes, it uses a multilevel index, this was needed to support up to 8MB files. The combination of pointers
+was chosen to make things as simple as possible. Since single and double indirect pointers are cumbersome to 
+deal with (hard to debug multiple read/writes to disk) we limited them to 1 each. We then aimed to 
+maximize the number of direct pointers while still leaving space for other flag/size members thus we chose 120. 
+Which meant that Direct Pointers alone could handle files of up to almost 64KB.
+
+
+			    SUBDIRECTORIES
+			    ==============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+
+// Added to thread struct in thread.h
+struct thread
+{
+    struct dir* cwd;               /* Current Working Directory of thread */
+};
+
+
+// Added to process_startup_package in process.c to init new thread with parents directory
+struct process_startup_package{
+  struct dir* current_dir;
+};
+
+
+---- ALGORITHMS ----
+
+>> B2: Describe your code for traversing a user-specified path.  How
+>> do traversals of absolute and relative paths differ?
+
+To traverse the path, we first tokenize the path with "/". If the command
+starts with a "/" then we start our traversal at the root directory. This is an absolute path. 
+Otherwise, it will be a relative path and we start with the threads current directory. 
+
+We then traverse by looking up a token in a directory (dir_lookup), if it exists, we move to that directory.
+If it does not exist we check if its the last token to make sure there is no error (in the path) then return. 
+
+Note: We don't need to do anythying special for "." and ".." since these are added to the directory upon initialization.
+
+
+---- RATIONALE ----
+
+>> B6: Explain why you chose to represent the current directory of a
+>> process the way you did.
+
+    We chose to represent the current directory of a process with "struct dir*""
+    We used this struct as it allowed us to access the directory's corresponding inode struct 
+    and allowed us to easily use the already-implemented dir_add and dir_lookup functions without
+    having to open the directory every time. 
+
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students in future quarters?
+
+>> Any other comments?

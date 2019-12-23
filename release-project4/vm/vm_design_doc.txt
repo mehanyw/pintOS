@@ -1,0 +1,263 @@
+       		    +---------------------------+
+		    |	       EE 461S	        |
+		    | PROJECT 3: VIRTUAL MEMORY	|
+		    |	    DESIGN DOCUMENT	|
+		    +---------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Ammar Sheikh <ammarsheikh@utexas.edu>
+Waseem Mehany <mehanyw@utexas.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			PAGE TABLE MANAGEMENT
+			=====================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+
+vm.h
+----------
+struct spt_entry {
+	void* 			frame;			 /* Kernal VM which corresponds to frame */
+	void* 			vaddr;			 /* Virtual Address of Page */
+	int 			vpn;			   /* Virtual Page Number - Key in Hashmap*/
+	bool 			valid;			   /* Flag indicating valid address */
+	bool 			present;		   /* Flag indicating if page is resident in RAM */
+	struct file* 	file;			 /* File pointer if page bytes are in FS. DO I DO THIS OS MMAP??? */
+	off_t 			file_offset;  /* File Offset */
+	int32_t 		zeros;			  /* Zeroes Present */
+	bool 			writable;		    /* IS THIS NEEDED OR CAN I USE THE EXCEPTION VARS */
+	bool 			swap;
+	int32_t 		swap_slot;		/* Flag if page is in swap */
+	bool 			stack;
+	struct hash_elem elem;		/* Hashmap element */
+};
+
+
+
+
+
+---- ALGORITHMS ----
+
+>> A2: In a few paragraphs, describe your code for locating the frame,
+>> if any, that contains the data of a given page.
+
+
+	To locate a page in our spte we simply use the VPN as the key in our hash. Since we have the faulting
+	address in our page fault handler we can simply look up the VPN in that hash table to see if a spt 
+	entry exists. This will then tell us the virtual address of the page, and whether its in swap space
+	or in the file system.
+
+	After this we simply get a frame from our frame allocator, read from the file or swap slot and
+	install the page into our page directory.
+
+
+---- SYNCHRONIZATION ----
+
+>> A3: When two user processes both need a new frame at the same time,
+>> how are races avoided?
+
+	When a new frame is needed there is a call to our frame allocator. Our frame allocator has a lock
+	within it so that only one process can be given a frame at a time. 
+
+
+---- RATIONALE ----
+
+>> A4: Why did you choose the data structure(s) that you did for
+>> representing virtual-to-physical mappings?
+
+Supplemental Page Table:
+    We used a hash table for this our SPT for quick look-up. Since we know the fault address in a page
+    fault we can easily get the VPN, which is the key for the SPT hash and easily query the table for
+    info. 
+Frame Table:
+    We used a list for this data structure because it allows for easy insertion and iteration. Simple
+    iteration is useful for our Eviction policy.
+Swap Table:
+  	We used a bitmap since we the only info we need to know about a slot is whether it is open or not.
+  	Thus bitmap is more memory efficient and can easily represent the availability of a slot.
+
+
+		       PAGING TO AND FROM DISK
+		       =======================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+frame.h
+----------
+Frame Table Entry. Each entry in the frame table contains a
+pointer to the page that currently occupies it and the owner thread.
+struct ft_entry {
+	void* 				      frame;			/* Address of the frame */
+	struct thread* 		  owner;			/* Reference to the owning thread of the frame */
+	struct spt_entry* 	spte;			  /* SPTE corresponding page */
+	struct list_elem 	  elem;
+};
+
+frame.c
+----------
+/* Frame Table list and Lock */
+static struct list frame_table;
+static struct lock ft_lock;
+
+
+/* Frame evict lock */
+struct lock evict_lock;
+
+
+---- ALGORITHMS ----
+
+>> B2: When a frame is required but none is free, some frame must be
+>> evicted.  Describe your code for choosing a frame to evict.
+
+
+	When our frame allocator can not find a free frame to return, it evicts a frame. To evict,
+	we iterate through our frame table, looking for frames which have not yet been accessed. If we pass a 
+	frame, that has been accessed we set it to false (not accessed). If all frames have been accessed,
+	then the first frame is returned- since it has been set to not accessed.
+
+
+>> B3: When a process P obtains a frame that was previously used by a
+>> process Q, how do you adjust the page table (and any other data
+>> structures) to reflect the frame Q no longer has?
+
+	As seen above, every frame table entry keeps a reference to the thread that owns it and 
+	the supplemental page table entry which it corresponds to. During the eviction process, once a frame 
+	has been selected to be evicted, the page table entry of the original owning-thread is cleared using
+	the reference to the owning thread and the original spte (which contains the virtual address which
+	the frame is mapped to). This clears the virtual mapping within process Q. Then we adjust the the old
+	spte to reflect that by adjusting it ot show the slot, etc. Finally we set the frame table entry's 
+	spte and owner thread to the new spte and new current thread, Process P. 
+
+
+>> B4: Explain your heuristic for deciding whether a page fault for an
+>> invalid virtual address should cause the stack to be extended into
+>> the page that faulted.
+	
+	First we find our stack pointer. This will either be the stack pointer saved within the
+	TCB or will be within the interrupt frame parameter. We do this by checking the interrupt frame's esp 
+	to see if its a user Virtual address or not. At this point we have the correct the stack pointer, 
+	next, we check the faulting address, if it is below PHY_BASE - 8MB, then we know that either stack 
+	growth is needed or the user program is trying to access an address within the stack that it should 
+	not. To check for a bad user stack-address access, we check if the (esp - 32) > fault_address. We use 
+	32 specifically since x86 has an instruction PUSHA which pushes all registers to the stack, meaning 
+	esp - 32 can be valid. Once we know the stack access is "not bad", we allocate frames for stack growth.
+
+
+
+---- SYNCHRONIZATION ----
+
+>> B5: Explain the basics of your VM synchronization design.  In
+>> particular, explain how it prevents deadlock.  (Refer to the
+>> textbook for an explanation of the necessary conditions for
+>> deadlock.)
+
+	In our VM implementation there are 3 main locks. A lock for frame assignment (frame lock), a lock for 
+	frame table insertion (frame table lock), and a lock for swap table insertion(swap lock). Our swap 
+	lock is simply used to ensure the swap table bitmap is synchronized so that no two threads try to 
+	write to the same swap slot. Likewise, the frame table lock is used to ensure synchronized access/modifcation of the frame table across all threads. Finally the frame lock is used to lock assignment 
+	of frames to one process at a time, this is a bit of a bottleneck but it simplifies things. 
+
+	With the swap table and frame table locks, deadlocks are easy to prevent since locks are immediately 
+	released after access/modifcation of the table and since kernel frames aren't evicted, there is not a 
+	possibility of a page fault occuring within one of these critical sections and the same thread 
+	re-entering the function without releasing the lock.
+
+
+>> B6: A page fault in process P can cause another process Q's frame
+>> to be evicted. How do you ensure that Q cannot access or modify
+>> the page during the eviction process?  How do you avoid a race
+>> between P evicting Q's frame and Q faulting the page back in?
+
+	To avoid Q from accesses/modifys, as soon as a frame is selected to be evicted, its page is 
+	"cleared", meaning any access to address will result in page_fault since the virtual address is 
+	invalidated.
+
+	The frame lock is used to avoid the eviction/faulting-back-in scenario. Since only one process at a 
+	time can be assigned/evict a frame. If Process P is currently being given a frame belonging to Q, Q 
+	cannot be allocated any frame until this evcition has finished. Only after will Q have the ability to 
+	get a frame.
+	
+
+
+>> B7: Suppose a page fault in process P causes a page to be read from
+>> the file system or swap.  How do you ensure that a second process Q
+>> cannot interfere by e.g. attempting to evict the frame while it is
+>> still being read in?
+
+	If process P is loading in a page, It will first need to be given a frame from the frame allocator. 
+	Due to the frame lock, Process Q cannot evict/assign any frame until Process P has been assigned a 
+	frame.Now if Process Q decides to evict Process P's frame before the page is loaded and installed, it 
+	can, but Process P will page fault again and will get another frame. It is possible that the two 
+	continously keep exchanging the same frame, but unlikely since the eviction algorithm will try to 
+	look for unaccessed frames.
+
+
+>> B8: Explain how you handle access to paged-out pages that occur
+>> during system calls.  Do you use page faults to bring in pages (as
+>> in user programs), or do you have a mechanism for "locking" frames
+>> into physical memory, or do you use some other design?  How do you
+>> gracefully handle attempted accesses to invalid virtual addresses?
+
+	During a system call, if there is access to a paged-out page then a page fault will occur and load in 
+	the page. Acesses to NULL and invalid address are handled both within the system calls and wihtin the 
+	page fault handler.
+
+
+---- RATIONALE ----
+
+>> B9: A single lock for the whole VM system would make
+>> synchronization easy, but limit parallelism.  On the other hand,
+>> using many locks complicates synchronization and raises the
+>> possibility for deadlock but allows for high parallelism.  Explain
+>> where your design falls along this continuum and why you chose to
+>> design it this way.
+
+	I'd say we fall near the middle, but slightly closer to single-lock design rather than multiple-lock. 
+	Since a huge part of VM is frame allocation/eviction and because we just essentially just locked the 
+	whole frame allocator. We almost single-handedly rely on this lock to avoid all parallel frame bugs. 
+	As for why we designed it this way, we did it because it seemed the simplest.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
+
